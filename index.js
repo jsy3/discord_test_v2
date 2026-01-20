@@ -26,7 +26,7 @@ const {
 ================================ */
 const FORUM_CHANNEL_ID = '1462720250704433336';
 const VOICE_CATEGORY_ID = '1462740011387715615';
-const ENTRY_CHANNEL_ID = '1462720250704433336'; // 모집 버튼 상시 노출 채널
+const ENTRY_CHANNEL_ID = '1462999658899968070'; // 모집 버튼 상시 노출 채널
 
 const FORUM_TAGS = {
   trial: '1462732371433619665',
