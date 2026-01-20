@@ -15,11 +15,7 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  ModalBuilder,
-  TextInputBuilder,
-  TextInputStyle,
-  ChannelType,
-  StringSelectMenuBuilder
+  ChannelType
 } = require('discord.js');
 
 /* ===============================
@@ -43,6 +39,8 @@ const recruitCache = new Map();
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildVoiceStates
   ]
 });
@@ -86,106 +84,70 @@ client.on('interactionCreate', async interaction => {
     }
 
     if (interaction.commandName === 'recruit') {
+      recruitCache.set(interaction.user.id, {
+        step: 'WAIT_TEXT',
+        text: '',
+        voice: true,
+        limit: 0,
+        tags: new Set()
+      });
+
       return interaction.reply({
-        content: '모집글을 작성해주세요.',
-        components: [
-          new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-              .setCustomId('open_recruit_modal')
-              .setLabel('모집글 작성')
-              .setStyle(ButtonStyle.Primary)
-          )
-        ],
+        content: '✏️ **모집글 내용을 채팅으로 입력해주세요.**',
         ephemeral: true
       });
     }
   }
 
-  /* ---------- Modal Open ---------- */
-  if (interaction.isButton() && interaction.customId === 'open_recruit_modal') {
-    const modal = new ModalBuilder()
-      .setCustomId('recruit_modal')
-      .setTitle('모집글 작성');
+  /* ---------- 모집글 내용 입력 ---------- */
+  if (interaction.isMessageCreate && interaction.author) return;
+});
 
-    modal.addComponents(
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId('recruit_text')
-          .setLabel('모집글 내용')
-          .setStyle(TextInputStyle.Paragraph)
-          .setRequired(true)
-      )
-    );
+/* ===============================
+   Message Create (모집글 입력)
+================================ */
+client.on('messageCreate', async message => {
+  if (message.author.bot) return;
 
-    return interaction.showModal(modal);
+  const data = recruitCache.get(message.author.id);
+  if (!data || data.step !== 'WAIT_TEXT') return;
+
+  data.text = message.content;
+  data.step = 'OPTIONS';
+
+  await message.reply({
+    content: '옵션을 선택해주세요.',
+    components: buildOptionComponents(data)
+  });
+});
+
+/* ===============================
+   Button Interaction
+================================ */
+client.on('interactionCreate', async interaction => {
+  if (!interaction.isButton()) return;
+
+  const data = recruitCache.get(interaction.user.id);
+  if (!data) return;
+
+  const id = interaction.customId;
+
+  /* 음성 토글 */
+  if (id === 'voice_on') data.voice = true;
+  if (id === 'voice_off') data.voice = false;
+
+  /* 인원 */
+  if (id === 'duo') data.limit = 2;
+  if (id === 'trio') data.limit = 3;
+
+  /* 태그 토글 */
+  if (id.startsWith('tag_')) {
+    const tag = id.replace('tag_', '');
+    data.tags.has(tag) ? data.tags.delete(tag) : data.tags.add(tag);
   }
 
-  /* ---------- Modal Submit ---------- */
-  if (interaction.isModalSubmit() && interaction.customId === 'recruit_modal') {
-    const text = interaction.fields.getTextInputValue('recruit_text');
-
-    recruitCache.set(interaction.user.id, {
-      text,
-      voice: true,
-      limit: 0,
-      tags: []
-    });
-
-    return interaction.reply({
-      content: '옵션을 선택해주세요.',
-      components: [
-        new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId('voice_on').setLabel('🔊 음성 ON').setStyle(ButtonStyle.Success),
-          new ButtonBuilder().setCustomId('voice_off').setLabel('🔇 음성 OFF').setStyle(ButtonStyle.Secondary)
-        ),
-        new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId('duo').setLabel('듀오').setStyle(ButtonStyle.Primary),
-          new ButtonBuilder().setCustomId('trio').setLabel('트리오').setStyle(ButtonStyle.Primary)
-        ),
-        new ActionRowBuilder().addComponents(
-          new StringSelectMenuBuilder()
-            .setCustomId('forum_tags')
-            .setPlaceholder('태그 선택')
-            .setMinValues(0)
-            .setMaxValues(4)
-            .addOptions(
-              { label: '시련', value: 'trial' },
-              { label: '뉴비', value: 'newbie' },
-              { label: 'PVE', value: 'pve' },
-              { label: 'PVP', value: 'pvp' }
-            )
-        ),
-        new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId('confirm').setLabel('✅ 모집글 생성').setStyle(ButtonStyle.Success)
-        )
-      ],
-      ephemeral: true
-    });
-  }
-
-  /* ---------- 태그 선택 ---------- */
-  if (interaction.isStringSelectMenu() && interaction.customId === 'forum_tags') {
-    const data = recruitCache.get(interaction.user.id);
-    if (!data) return;
-    data.tags = interaction.values;
-    return interaction.deferUpdate();
-  }
-
-  /* ---------- 옵션 버튼 ---------- */
-  if (interaction.isButton()) {
-    const data = recruitCache.get(interaction.user.id);
-    if (!data) return;
-
-    if (interaction.customId === 'voice_on') data.voice = true;
-    if (interaction.customId === 'voice_off') data.voice = false;
-    if (interaction.customId === 'duo') data.limit = 2;
-    if (interaction.customId === 'trio') data.limit = 3;
-
-    if (interaction.customId !== 'confirm') {
-      return interaction.deferUpdate();
-    }
-
-    /* ---------- 최종 생성 ---------- */
+  /* 최종 생성 */
+  if (id === 'confirm') {
     const guild = interaction.guild;
     const forum = await guild.channels.fetch(FORUM_CHANNEL_ID);
 
@@ -205,10 +167,8 @@ client.on('interactionCreate', async interaction => {
       name: data.voice
         ? `🎮 ${data.text.slice(0, 20)}\n${voiceUrl}`
         : data.text.slice(0, 30),
-      appliedTags: data.tags.map(t => FORUM_TAGS[t]),
-      message: {
-        content: data.text
-      }
+      appliedTags: [...data.tags].map(t => FORUM_TAGS[t]),
+      message: { content: data.text }
     });
 
     recruitCache.delete(interaction.user.id);
@@ -218,7 +178,53 @@ client.on('interactionCreate', async interaction => {
       ephemeral: true
     });
   }
+
+  return interaction.update({
+    components: buildOptionComponents(data)
+  });
 });
+
+/* ===============================
+   UI Builder
+================================ */
+function buildOptionComponents(data) {
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('voice_on')
+        .setLabel('🔊 음성 ON')
+        .setStyle(data.voice ? ButtonStyle.Primary : ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('voice_off')
+        .setLabel('🔇 음성 OFF')
+        .setStyle(!data.voice ? ButtonStyle.Primary : ButtonStyle.Secondary)
+    ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('duo')
+        .setLabel('듀오')
+        .setStyle(data.limit === 2 ? ButtonStyle.Primary : ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('trio')
+        .setLabel('트리오')
+        .setStyle(data.limit === 3 ? ButtonStyle.Primary : ButtonStyle.Secondary)
+    ),
+    new ActionRowBuilder().addComponents(
+      ...['trial', 'newbie', 'pve', 'pvp'].map(t =>
+        new ButtonBuilder()
+          .setCustomId(`tag_${t}`)
+          .setLabel(t.toUpperCase())
+          .setStyle(data.tags.has(t) ? ButtonStyle.Primary : ButtonStyle.Secondary)
+      )
+    ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('confirm')
+        .setLabel('✅ 모집글 생성')
+        .setStyle(ButtonStyle.Success)
+    )
+  ];
+}
 
 /* ===============================
    Login
