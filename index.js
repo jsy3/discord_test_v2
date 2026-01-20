@@ -15,6 +15,9 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
   ChannelType
 } = require('discord.js');
 
@@ -23,6 +26,7 @@ const {
 ================================ */
 const FORUM_CHANNEL_ID = '1462720250704433336';
 const VOICE_CATEGORY_ID = '1462740011387715615';
+const ENTRY_CHANNEL_ID = '1462720250704433336'; // 모집 버튼 상시 노출 채널
 
 const FORUM_TAGS = {
   trial: '1462732371433619665',
@@ -39,14 +43,12 @@ const recruitCache = new Map();
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildVoiceStates
   ]
 });
 
 /* ===============================
-   Slash Command
+   Slash Command (선택사항)
 ================================ */
 const commands = [
   new SlashCommandBuilder().setName('ping').setDescription('봇 확인'),
@@ -66,126 +68,7 @@ const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 })();
 
 /* ===============================
-   Ready
-================================ */
-client.once('ready', () => {
-  console.log(`🤖 로그인 성공: ${client.user.tag}`);
-});
-
-/* ===============================
-   Interaction
-================================ */
-client.on('interactionCreate', async interaction => {
-
-  /* ---------- Slash ---------- */
-  if (interaction.isChatInputCommand()) {
-    if (interaction.commandName === 'ping') {
-      return interaction.reply('🏓 Pong!');
-    }
-
-    if (interaction.commandName === 'recruit') {
-      recruitCache.set(interaction.user.id, {
-        step: 'WAIT_TEXT',
-        text: '',
-        voice: true,
-        limit: 0,
-        tags: new Set()
-      });
-
-      return interaction.reply({
-        content: '✏️ **모집글 내용을 채팅으로 입력해주세요.**',
-        ephemeral: true
-      });
-    }
-  }
-
-  /* ---------- 모집글 내용 입력 ---------- */
-  if (interaction.isMessageCreate && interaction.author) return;
-});
-
-/* ===============================
-   Message Create (모집글 입력)
-================================ */
-client.on('messageCreate', async message => {
-  if (message.author.bot) return;
-
-  const data = recruitCache.get(message.author.id);
-  if (!data || data.step !== 'WAIT_TEXT') return;
-
-  data.text = message.content;
-  data.step = 'OPTIONS';
-
-  await message.reply({
-    content: '옵션을 선택해주세요.',
-    components: buildOptionComponents(data)
-  });
-});
-
-/* ===============================
-   Button Interaction
-================================ */
-client.on('interactionCreate', async interaction => {
-  if (!interaction.isButton()) return;
-
-  const data = recruitCache.get(interaction.user.id);
-  if (!data) return;
-
-  const id = interaction.customId;
-
-  /* 음성 토글 */
-  if (id === 'voice_on') data.voice = true;
-  if (id === 'voice_off') data.voice = false;
-
-  /* 인원 */
-  if (id === 'duo') data.limit = 2;
-  if (id === 'trio') data.limit = 3;
-
-  /* 태그 토글 */
-  if (id.startsWith('tag_')) {
-    const tag = id.replace('tag_', '');
-    data.tags.has(tag) ? data.tags.delete(tag) : data.tags.add(tag);
-  }
-
-  /* 최종 생성 */
-  if (id === 'confirm') {
-    const guild = interaction.guild;
-    const forum = await guild.channels.fetch(FORUM_CHANNEL_ID);
-
-    let voiceUrl = '';
-    if (data.voice) {
-      const vc = await guild.channels.create({
-        name: `🎮 ${data.text.slice(0, 30)}`,
-        type: ChannelType.GuildVoice,
-        parent: VOICE_CATEGORY_ID,
-        userLimit: data.limit
-      });
-
-      voiceUrl = `https://discord.com/channels/${guild.id}/${vc.id}`;
-    }
-
-    const thread = await forum.threads.create({
-      name: data.voice
-        ? `🎮 ${data.text.slice(0, 20)}\n${voiceUrl}`
-        : data.text.slice(0, 30),
-      appliedTags: [...data.tags].map(t => FORUM_TAGS[t]),
-      message: { content: data.text }
-    });
-
-    recruitCache.delete(interaction.user.id);
-
-    return interaction.reply({
-      content: `✅ 모집글 생성 완료\n👉 ${thread.url}`,
-      ephemeral: true
-    });
-  }
-
-  return interaction.update({
-    components: buildOptionComponents(data)
-  });
-});
-
-/* ===============================
-   UI Builder
+   UI 빌더
 ================================ */
 function buildOptionComponents(data) {
   return [
@@ -210,12 +93,22 @@ function buildOptionComponents(data) {
         .setStyle(data.limit === 3 ? ButtonStyle.Primary : ButtonStyle.Secondary)
     ),
     new ActionRowBuilder().addComponents(
-      ...['trial', 'newbie', 'pve', 'pvp'].map(t =>
-        new ButtonBuilder()
-          .setCustomId(`tag_${t}`)
-          .setLabel(t.toUpperCase())
-          .setStyle(data.tags.has(t) ? ButtonStyle.Primary : ButtonStyle.Secondary)
-      )
+      new ButtonBuilder()
+        .setCustomId('tag_trial')
+        .setLabel('시련')
+        .setStyle(data.tags.includes('trial') ? ButtonStyle.Primary : ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('tag_newbie')
+        .setLabel('뉴비')
+        .setStyle(data.tags.includes('newbie') ? ButtonStyle.Primary : ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('tag_pve')
+        .setLabel('PVE')
+        .setStyle(data.tags.includes('pve') ? ButtonStyle.Primary : ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('tag_pvp')
+        .setLabel('PVP')
+        .setStyle(data.tags.includes('pvp') ? ButtonStyle.Primary : ButtonStyle.Secondary)
     ),
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
@@ -225,6 +118,167 @@ function buildOptionComponents(data) {
     )
   ];
 }
+
+/* ===============================
+   상시 모집 버튼 생성
+================================ */
+async function sendRecruitEntryMessage() {
+  const channel = await client.channels.fetch(ENTRY_CHANNEL_ID);
+  if (!channel) return;
+
+  const messages = await channel.messages.fetch({ limit: 10 });
+  const exists = messages.some(
+    m =>
+      m.author.id === client.user.id &&
+      m.components.length > 0 &&
+      m.components[0].components.some(c => c.customId === 'open_recruit_modal')
+  );
+
+  if (exists) return;
+
+  await channel.send({
+    content: '📝 **모집글을 작성하려면 아래 버튼을 눌러주세요**',
+    components: [
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('open_recruit_modal')
+          .setLabel('➕ 모집글 작성')
+          .setStyle(ButtonStyle.Primary)
+      )
+    ]
+  });
+}
+
+/* ===============================
+   Ready
+================================ */
+client.once('ready', async () => {
+  console.log(`🤖 로그인 성공: ${client.user.tag}`);
+  await sendRecruitEntryMessage(); // ✅ 항상 버튼 생성
+});
+
+/* ===============================
+   Interaction
+================================ */
+client.on('interactionCreate', async interaction => {
+
+  /* ---------- Slash ---------- */
+  if (interaction.isChatInputCommand()) {
+    if (interaction.commandName === 'ping') {
+      return interaction.reply('🏓 Pong!');
+    }
+
+    if (interaction.commandName === 'recruit') {
+      return interaction.reply({
+        content: '모집글을 작성해주세요.',
+        components: [
+          new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId('open_recruit_modal')
+              .setLabel('모집글 작성')
+              .setStyle(ButtonStyle.Primary)
+          )
+        ],
+        ephemeral: true
+      });
+    }
+  }
+
+  /* ---------- Modal Open ---------- */
+  if (interaction.isButton() && interaction.customId === 'open_recruit_modal') {
+    const modal = new ModalBuilder()
+      .setCustomId('recruit_modal')
+      .setTitle('모집글 작성');
+
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('recruit_text')
+          .setLabel('모집글 내용')
+          .setStyle(TextInputStyle.Paragraph)
+          .setRequired(true)
+      )
+    );
+
+    return interaction.showModal(modal);
+  }
+
+  /* ---------- Modal Submit ---------- */
+  if (interaction.isModalSubmit() && interaction.customId === 'recruit_modal') {
+    const text = interaction.fields.getTextInputValue('recruit_text');
+
+    recruitCache.set(interaction.user.id, {
+      text,
+      voice: true,
+      limit: 0,
+      tags: []
+    });
+
+    return interaction.reply({
+      content: '옵션을 선택해주세요.',
+      components: buildOptionComponents(recruitCache.get(interaction.user.id)),
+      ephemeral: true
+    });
+  }
+
+  /* ---------- Option Buttons ---------- */
+  if (interaction.isButton()) {
+    const data = recruitCache.get(interaction.user.id);
+    if (!data) return;
+
+    const id = interaction.customId;
+
+    if (id === 'voice_on') data.voice = true;
+    if (id === 'voice_off') data.voice = false;
+    if (id === 'duo') data.limit = 2;
+    if (id === 'trio') data.limit = 3;
+
+    if (id.startsWith('tag_')) {
+      const tag = id.replace('tag_', '');
+      data.tags = data.tags.includes(tag)
+        ? data.tags.filter(t => t !== tag)
+        : [...data.tags, tag];
+    }
+
+    if (id !== 'confirm') {
+      return interaction.update({
+        content: '옵션을 선택해주세요.',
+        components: buildOptionComponents(data)
+      });
+    }
+
+    /* ---------- 최종 생성 ---------- */
+    const guild = interaction.guild;
+    const forum = await guild.channels.fetch(FORUM_CHANNEL_ID);
+
+    let voiceUrl = '';
+    if (data.voice) {
+      const vc = await guild.channels.create({
+        name: `🎮 ${data.text.slice(0, 30)}`,
+        type: ChannelType.GuildVoice,
+        parent: VOICE_CATEGORY_ID,
+        userLimit: data.limit
+      });
+
+      voiceUrl = `https://discord.com/channels/${guild.id}/${vc.id}`;
+    }
+
+    const thread = await forum.threads.create({
+      name: `🎮 ${data.text.slice(0, 30)}`,
+      appliedTags: data.tags.map(t => FORUM_TAGS[t]),
+      message: {
+        content: `${data.text}${voiceUrl ? `\n🔊 ${voiceUrl}` : ''}`
+      }
+    });
+
+    recruitCache.delete(interaction.user.id);
+
+    return interaction.update({
+      content: `✅ 모집글 생성 완료\n👉 ${thread.url}`,
+      components: []
+    });
+  }
+});
 
 /* ===============================
    Login
